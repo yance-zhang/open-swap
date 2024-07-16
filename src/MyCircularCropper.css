@@ -1,0 +1,31 @@
+/* MyCircularCropper.css */
+
+/* 设置裁剪框为圆形 */
+.cropper-view-box,
+.cropper-face,
+.cropper-line,
+.cropper-point {
+  border-radius: 50%;
+}
+
+/* 隐藏裁剪框的边框 */
+.cropper-view-box {
+  box-shadow: none;
+}
+
+/* 设置裁剪框的背景颜色为透明 */
+.cropper-face {
+  background-color: transparent;
+}
+
+/* 可调整大小的样式设置 */
+.cropper-point.point-se,
+.cropper-point.point-sw,
+.cropper-point.point-nw,
+.cropper-point.point-ne {
+  width: 20px;
+  height: 20px;
+  border: 2px solid #39f;
+  background-color: #fff;
+  opacity: 0.8;
+}

@@ -1,0 +1,61 @@
+.token-picker-search {
+  padding: 12px 16px;
+  border-radius: 8px;
+  border: 1px solid rgba(69, 72, 81, 0.1);
+  background: #f0f0f0;
+}
+.ant-input {
+  background-color: #f0f0f0;
+}
+
+.token-list {
+  margin-top: 20px;
+  max-height: 700px;
+  overflow-y: auto;
+}
+.token-item {
+  height: 60px;
+  margin: 6px 0;
+  cursor: pointer;
+}
+.token-item:hover {
+  background-color: #f0f0f0;
+}
+.token-icon {
+  width: 32px;
+  height: 32px;
+}
+
+.token-icon img {
+  width: 32px;
+  height: 32px;
+}
+
+.token-name {
+  color: var(--color-text-1-day, #1a1a1b);
+  font-family: Manrope;
+  font-size: 18px;
+  font-style: normal;
+  font-weight: 600;
+  line-height: normal;
+}
+
+.token-desc {
+  color: var(--color-text-2-day, rgba(26, 26, 27, 0.5));
+  font-family: Manrope;
+  font-size: 16px;
+  font-style: normal;
+  font-weight: 500;
+  line-height: normal;
+}
+
+.token-number {
+  margin-left: auto;
+  color: var(--color-text-1-day, #1a1a1b);
+  text-align: right;
+  font-family: Manrope;
+  font-size: 16px;
+  font-style: normal;
+  font-weight: 600;
+  line-height: normal;
+}
