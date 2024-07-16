@@ -107,11 +107,6 @@ export const getBalanceByContractAddress = async (
   return readableBalance;
 };
 
-export const swapContract = await initContract(
-  swapContractAddress,
-  swapRouterAbi
-);
-
 export const getReverses = async (pairAddress: string) => {
   const pairContract = await initContract(pairAddress, tokenPairAbi);
   const reverses = await pairContract.getReserves();
@@ -146,6 +141,8 @@ export const doSwap = async (
     userAddress,
     deadline,
   ];
+
+  const swapContract = await initContract(swapContractAddress, swapRouterAbi);
 
   const gas = await swapContract.swapExactTokensForTokens.estimateGas(
     ...params
