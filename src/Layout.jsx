@@ -235,7 +235,7 @@ const Layout = (props) => {
   useEffect(() => {
     updateAccountCenter({ enabled: false });
     fetchTokens();
-    checkNetwork();
+    // checkNetwork();
   }, []);
 
   useEffect(() => {
