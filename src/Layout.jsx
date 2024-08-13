@@ -46,7 +46,7 @@ const NormalTab = (props) => {
       sx={{
         // marginLeft: "16px",
         padding: "0 16px",
-        height: "100%",
+        height: "44px",
         // background: "var(--tab-bg)",
         color: "var(--tab-color)",
         // width: "100px",
@@ -257,9 +257,15 @@ const Layout = (props) => {
         direction={"row"}
         position={"relative"}
         justifyContent={"space-between"}
-        sx={{ marginBottom: "20px" }}
+        sx={{ marginBottom: "20px", px: "24px" }}
       >
-        <Box style={{ fontWeight: "bold", fontSize: "24px" }}>
+        <Box
+          style={{
+            fontWeight: "bold",
+            fontSize: "24px",
+            color: theme === "light" ? "black" : "white",
+          }}
+        >
           Open Swap
           {/* <img
             style={{ display: "block" }}
@@ -271,9 +277,11 @@ const Layout = (props) => {
           sx={{
             border: "1px solid rgba(69, 72, 81, 0.1)",
             borderRadius: "20px",
+            height: "46px",
             background:
               theme === "light" ? "rgba(243, 243, 243, 1)" : "#2b2d34",
           }}
+          className="hidden lg:flex"
         >
           {["Swap", "Info"].map((tab, index) => {
             if (path === tab) {
@@ -300,10 +308,11 @@ const Layout = (props) => {
           sx={{
             display: "flex",
             alignItems: "center",
+            height: "46px",
             // position: "absolute",
             // right: "32px",
             // top: "0",
-            top: "50%",
+            // top: "50%",
             // transform: "translate(0,-50%)",
           }}
         >
@@ -323,6 +332,39 @@ const Layout = (props) => {
           </Box>
           <ConnectWalletButton />
         </Box>
+      </Stack>
+
+      <Stack
+        direction={"row"}
+        sx={{
+          border: "1px solid rgba(69, 72, 81, 0.1)",
+          borderRadius: "20px",
+          height: "46px",
+          width: "140px",
+          background: theme === "light" ? "rgba(243, 243, 243, 1)" : "#2b2d34",
+        }}
+        className="flex lg:hidden mx-auto mb-5"
+      >
+        {["Swap", "Info"].map((tab, index) => {
+          if (path === tab) {
+            return <ActiveTab key={index}>{tab}</ActiveTab>;
+          } else
+            return (
+              <Link to={`/${tab}`} key={index}>
+                <NormalTab
+                  onClick={() => {
+                    setTabIndex(index);
+                  }}
+                  style={{
+                    color: theme === "light" ? "#BABABA" : "#FFFFFF4D",
+                  }}
+                  key={index}
+                >
+                  {tab}
+                </NormalTab>
+              </Link>
+            );
+        })}
       </Stack>
       <ThemeContext.Provider value={theme}>
         {props.children}

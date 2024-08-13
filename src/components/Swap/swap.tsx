@@ -1,42 +1,56 @@
-import { SwapPairInfo, getETHPriceApi } from "../../api";
+import { SwapPairInfo } from "../../api";
 
 import { ArrowDownward, Close, ExpandMore, Info } from "@mui/icons-material";
 import {
-  Button,
   Input,
   MenuItem,
   Modal,
   Select,
   SelectChangeEvent,
 } from "@mui/material";
+import { useConnectWallet } from "@web3-onboard/react";
 import clsx from "clsx";
 import dayjs from "dayjs";
-import { Contract, formatEther, formatUnits, parseUnits } from "ethers";
-import { SnackbarKey, useSnackbar } from "notistack";
+import {
+  BrowserProvider,
+  Contract,
+  formatEther,
+  formatUnits,
+  parseUnits,
+} from "ethers";
+import { useSnackbar } from "notistack";
 import React, {
   FC,
   useCallback,
   useContext,
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
+import { RenderSnackbarAction } from ".";
 import { useDispatch, useSelector, userAddress } from "../../../lib/redux";
 import { checkApprove } from "../../contract";
 import {
   SWAP_ROUTER_ADDRESS,
   doSwap,
+  doSwapETHForTokens,
+  doSwapTokensForETH,
+  getETHBalance,
   getExchangeRateByPair,
-  getFeeData,
   initPairContract,
   initSwapContracts,
   initTokenContract,
 } from "../../contract/swap";
-import { SwapTokenInfo } from "../../types";
-import { formatBalanceNumber, formatNumber } from "../../utils";
-import { useConnectWallet } from "@web3-onboard/react";
 import ThemeContext from "../../ThemeContext";
+import { SwapTokenInfo } from "../../types";
+import {
+  DEFAULT_CALCULATE_PRECISION,
+  formatBalanceNumber,
+  formatNumber,
+  isSameAddress,
+  prettifyNumber,
+} from "../../utils";
+import { checkNetwork, getEthereum } from "../../utils/ethereum";
 
 export const DEFAULT_MINUTES = 5;
 export const DEFAULT_RATE_AMOUNT_IN = "0.0001";
@@ -45,37 +59,58 @@ export const DEFAULT_RATE_AMOUNT_OUT_MULTIPLAYER = BigInt(
 );
 export const DEBOUNCE_DELAY = 300;
 export const DANGER_SWAP_THRESHOLD = -0.1;
+export const ETH_ADDRESS = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
 
+export const filterTokenByPair = (
+  addr: string,
+  pairList: SwapPairInfo[],
+  WETHAddress: string,
+  tokenList: SwapTokenInfo[]
+) => {
+  const address = isSameAddress(addr, ETH_ADDRESS) ? WETHAddress : addr;
+  const matchedPair = pairList.filter(
+    (pair) =>
+      isSameAddress(pair.token0, address) || isSameAddress(pair.token1, address)
+  );
+
+  let tokenAddresses: string[] = [];
+  matchedPair.forEach((pair) => {
+    !tokenAddresses.includes(pair.token0) && tokenAddresses.push(pair.token0);
+    !tokenAddresses.includes(pair.token1) && tokenAddresses.push(pair.token1);
+  });
+
+  tokenAddresses = tokenAddresses.map((a) =>
+    isSameAddress(a, WETHAddress) ? ETH_ADDRESS : a
+  );
+
+  return tokenList.filter((token) => {
+    return (
+      !isSameAddress(token.address, address) &&
+      !isSameAddress(token.address, addr) &&
+      tokenAddresses.includes(token.address)
+    );
+  });
+};
 export const findPairByTokens = (
   tokenA: string,
   tokenB: string,
   pairList: SwapPairInfo[]
 ) => {
   const targetPair = pairList.find((pair) => {
-    if (pair.token0 === tokenA && pair.token1 === tokenB) {
+    if (
+      isSameAddress(pair.token0, tokenA) &&
+      isSameAddress(pair.token1, tokenB)
+    ) {
       return pair;
     }
-    if (pair.token1 === tokenA && pair.token0 === tokenB) {
+    if (
+      isSameAddress(pair.token1, tokenA) &&
+      isSameAddress(pair.token0, tokenB)
+    ) {
       return pair;
     }
   });
   return targetPair;
-};
-
-export const RenderSnackbarAction: FC<{
-  snackbarKey: SnackbarKey;
-  closeSnackbar: (key: SnackbarKey) => void;
-}> = ({ snackbarKey, closeSnackbar }) => {
-  return (
-    <div
-      className="flex items-center justify-center w-[18px] h-[18px] overflow-hidden cursor-pointer"
-      onClick={() => {
-        closeSnackbar(snackbarKey);
-      }}
-    >
-      <Close className="scale-75" />
-    </div>
-  );
 };
 
 export const SwapTokenInput: FC<{
@@ -118,11 +153,18 @@ export const SwapTokenInput: FC<{
     if (!token.address || !userAccount) {
       return;
     }
+
     const fetchBalance = async () => {
+      if (isSameAddress(token.address, ETH_ADDRESS)) {
+        const res = await getETHBalance(userAccount);
+
+        setBalance(Number(formatEther(res)));
+        return;
+      }
       const tokenContract = await initTokenContract(token.address);
       const res = await tokenContract.balanceOf(userAccount);
 
-      setBalance(Number(formatEther(res)));
+      setBalance(Number(formatUnits(res, token.decimals)));
     };
     fetchBalance();
   }, [token, updateTime, userAccount]);
@@ -133,6 +175,7 @@ export const SwapTokenInput: FC<{
         <Select
           variant="standard"
           sx={{ height: "40px" }}
+          className="token-input-select"
           value={token.address}
           disableUnderline
           onChange={handleSelect}
@@ -148,9 +191,11 @@ export const SwapTokenInput: FC<{
           {tokenList.map((t) => (
             <MenuItem key={t.address} value={t.address}>
               <span className="flex items-center gap-1">
-                <span className="inline-block min-w-8 h-8 rounded-full bg-slate-400">
-                  {t.icon}
-                </span>
+                <img
+                  src={t.icon}
+                  className="inline-block min-w-8 h-8 rounded-full bg-slate-200"
+                  alt=""
+                />
                 <span className=" font-medium text-base dark:text-white">
                   {t.name}
                 </span>
@@ -192,9 +237,9 @@ export const SwapTokenInput: FC<{
             );
             onValueChange(validStr, Number(value) > balance);
           }}
-          onBlur={(e) => {
-            onValueChange(`${Number(e.target.value)}`, Number(value) > balance);
-          }}
+          // onBlur={(e) => {
+          //   onValueChange(`${Number(e.target.value)}`, Number(value) > balance);
+          // }}
           value={value}
         />
       </div>
@@ -238,6 +283,7 @@ export const SlippageController: FC<{
   onDeadlineChange: (deadline: number) => void;
 }> = ({ slippage, onSlippageChange, deadline, onDeadlineChange }) => {
   const [showSetting, setShowSetting] = useState<boolean>(false);
+  const [mode, setMode] = useState<string>("auto");
   const theme: any = useContext(ThemeContext);
   const isLight = theme === "light";
 
@@ -264,6 +310,10 @@ export const SlippageController: FC<{
                   "py-1.5 px-2.5 border-r border-black dark:border-white/50",
                   slippage === defaultSlippagePercent && "bg-[#FF8A02]/50"
                 )}
+                onClick={() => {
+                  setMode("auto");
+                  onSlippageChange("1");
+                }}
               >
                 Auto
               </button>
@@ -272,6 +322,7 @@ export const SlippageController: FC<{
                   "py-1.5 px-2.5",
                   slippage !== defaultSlippagePercent && "bg-[#FF8A02]/50"
                 )}
+                onClick={() => setMode("custom")}
               >
                 Custom
               </button>
@@ -294,6 +345,7 @@ export const SlippageController: FC<{
                 },
               }}
               value={slippage}
+              disabled={mode === "auto"}
               onChange={(e: any) => {
                 const validStr = e.target.value.replace(
                   /[^0-9]{0,1}(\d*(?:\.\d{0,18})?).*$/g,
@@ -343,7 +395,9 @@ export const SlippageController: FC<{
 const Swap: FC<{
   tokenList: SwapTokenInfo[];
   pairList: SwapPairInfo[];
-}> = ({ tokenList = [], pairList = [] }) => {
+  ethPrice: number;
+  tokenPriceMap: any;
+}> = ({ tokenList, pairList, ethPrice, tokenPriceMap }) => {
   const dispatch = useDispatch();
   const [{ wallet }, connect] = useConnectWallet();
   const userAccount = useSelector(userAddress);
@@ -355,14 +409,14 @@ const Swap: FC<{
   const [payAmount, setPayAmount] = useState<string>("0");
   const [receiveAmount, setReceiveAmount] = useState<string>("0");
   const [disabledBtn, setDisabledBtn] = useState<boolean>(false);
-  const [exchangeRate, setExchangeRate] = useState<bigint>(0n);
+  const [exchangeRate, setExchangeRate] = useState<number>(0);
   const [pairAddress, setPairAddress] = useState<string>("");
   const [slippage, setSlippage] = useState<string>(defaultSlippagePercent);
   const [deadline, setDeadline] = useState<number>(DEFAULT_MINUTES);
   const [payAllowance, setPayAllowance] = useState<bigint>(0n);
   const [updateTime, setUpdateTime] = useState<number>(0);
   const [showSwapDetail, setShowSwapDetail] = useState<boolean>(false);
-  const [gasCost, setGasCost] = useState<string>("0");
+  // const [gasCost, setGasCost] = useState<string>('0');
   const [balanceExceed, setBalanceExceed] = useState<boolean>(false);
   const [filteredTokenList, setFilteredTokenList] = useState<SwapTokenInfo[]>(
     []
@@ -373,21 +427,17 @@ const Swap: FC<{
     pay: number;
     receive: number;
   }>({ pay: 0, receive: 0 });
+  const [WETHAddress, setWETHAddress] = useState<string>("");
+  const [priceSlippage, setPriceSlippage] = useState<number>(0);
 
   const init = async () => {
+    await checkNetwork();
     const contracts = await initSwapContracts();
     setSwapContract(contracts?.swapContract);
 
-    try {
-      const feeData = await getFeeData();
-      const gasPrice = feeData?.maxPriorityFeePerGas || 0n;
-      const res = await getETHPriceApi();
-      const ethPrice: number = res.ethereum.usd;
-      const cost = Number(formatEther(gasPrice)) * 200000 * ethPrice;
-
-      setGasCost(formatNumber(cost));
-    } catch (error) {
-      console.log(error);
+    if (contracts?.swapContract) {
+      const weth = await contracts.swapContract.WETH();
+      setWETHAddress(weth);
     }
   };
 
@@ -401,13 +451,21 @@ const Swap: FC<{
     const val = await getExchangeRateByPair(
       value,
       swapContract,
-      [receiveToken.address, payToken.address],
+      [
+        isSameAddress(receiveToken.address, ETH_ADDRESS)
+          ? WETHAddress
+          : receiveToken.address,
+        isSameAddress(payToken.address, ETH_ADDRESS)
+          ? WETHAddress
+          : payToken.address,
+      ],
       receiveToken.decimals
     );
     const pay = Number(formatUnits(val, payToken.decimals));
-    setPayAmount(pay ? pay.toFixed(3) : "0");
-    setExchangeRate(parseUnits((Number(value) / pay).toString()));
+    setPayAmount(pay ? prettifyNumber(pay).toString() : "0");
+    setExchangeRate(Number(value) / pay);
     setDisabledBtn(false);
+    calcPriceSlippage(pay ? prettifyNumber(pay).toString() : "0", value);
   };
 
   const updatePayAmountDebounced = (value: string) => {
@@ -428,13 +486,24 @@ const Swap: FC<{
     const val = await getExchangeRateByPair(
       value,
       swapContract,
-      [payToken.address, receiveToken.address],
+      [
+        isSameAddress(payToken.address, ETH_ADDRESS)
+          ? WETHAddress
+          : payToken.address,
+        isSameAddress(receiveToken.address, ETH_ADDRESS)
+          ? WETHAddress
+          : receiveToken.address,
+      ],
       payToken.decimals
     );
     const receive = Number(formatUnits(val, receiveToken.decimals));
-    setReceiveAmount(receive ? receive.toFixed(3) : "0");
-    setExchangeRate(parseUnits((receive / Number(value)).toString()));
+    setReceiveAmount(receive ? prettifyNumber(receive).toString() : "0");
+    setExchangeRate(receive / Number(value));
     setDisabledBtn(false);
+    calcPriceSlippage(
+      value,
+      receive ? prettifyNumber(receive).toString() : "0"
+    );
   };
 
   const updateReceiveAmountDebounced = (value: string) => {
@@ -446,40 +515,63 @@ const Swap: FC<{
   };
 
   const getBaseExchangeRate = async () => {
-    if (!swapContract || !payToken.address || !receiveToken.address) {
+    if (!pairAddress) {
       return;
     }
+
+    await checkNetwork();
     try {
-      const val = await getExchangeRateByPair(
-        DEFAULT_RATE_AMOUNT_IN,
-        swapContract,
-        [payToken.address, receiveToken.address],
-        payToken.decimals
-      );
-      setExchangeRate(val * DEFAULT_RATE_AMOUNT_OUT_MULTIPLAYER);
+      const pairContract = await initPairContract(pairAddress);
+      const reserves = (await pairContract.getReserves()).toObject();
+      const token0 = await pairContract.token0();
+      const { _reserve0, _reserve1 } = reserves;
+      let amounts = {
+        pay: 0,
+        receive: 0,
+      };
+
+      if (isSameAddress(payToken.address, token0)) {
+        amounts = {
+          pay: Number(formatUnits(_reserve0, payToken.decimals)),
+          receive: Number(formatUnits(_reserve1, receiveToken.decimals)),
+        };
+      } else {
+        amounts = {
+          pay: Number(formatUnits(_reserve1, payToken.decimals)),
+          receive: Number(formatUnits(_reserve0, receiveToken.decimals)),
+        };
+      }
+
+      setExchangeRate(amounts.receive / amounts.pay);
     } catch (error) {
       console.log(error);
     }
   };
 
   const approvePayToken = async () => {
+    await checkNetwork();
     setDisabledBtn(true);
     const payTokenContract = await initTokenContract(payToken.address);
 
     const key = "approveSwapRouter";
     enqueueSnackbar({
       message: "Pending approval...",
+      variant: "info",
       key,
       action: (key) => (
         <RenderSnackbarAction snackbarKey={key} closeSnackbar={closeSnackbar} />
       ),
     });
     try {
+      const provider = getEthereum();
+      const ethersProvider = new BrowserProvider(provider);
+      const nonce = await ethersProvider.getTransactionCount(userAccount);
       const allowance = await checkApprove(
         payTokenContract,
         userAccount,
         SWAP_ROUTER_ADDRESS,
         payAmount,
+        nonce,
         payToken.decimals
       );
       setPayAllowance(allowance || 0n);
@@ -492,6 +584,9 @@ const Swap: FC<{
   };
 
   const fetchAllowance = async () => {
+    if (isSameAddress(payToken.address, ETH_ADDRESS)) {
+      return;
+    }
     const payTokenContract = await initTokenContract(payToken.address);
 
     const allowance = await payTokenContract.allowance(
@@ -509,7 +604,7 @@ const Swap: FC<{
         const token0 = await pairContract.token0();
         const { _reserve0, _reserve1 } = reserves;
 
-        if (payToken.address === token0) {
+        if (isSameAddress(payToken.address, token0)) {
           setCurrentPairLiquidity({
             pay: Number(formatUnits(_reserve0, payToken.decimals)),
             receive: Number(formatUnits(_reserve1, receiveToken.decimals)),
@@ -540,10 +635,13 @@ const Swap: FC<{
       return;
     }
 
+    await checkNetwork();
+
     setDisabledBtn(true);
     const key = "swap";
     enqueueSnackbar({
       message: "Pending transaction...",
+      variant: "info",
       key,
       action: (key) => (
         <RenderSnackbarAction snackbarKey={key} closeSnackbar={closeSnackbar} />
@@ -553,17 +651,61 @@ const Swap: FC<{
     const ddl = dayjs().add(deadline, "minute").unix();
 
     try {
-      const tx = await doSwap(
-        payAmount,
-        (Number(receiveAmount) * (1 - Number(slippage) / 100)).toString(),
-        [payToken.address, receiveToken.address],
-        userAccount,
-        ddl,
-        swapContract,
-        payToken.decimals
-      );
+      const provider = getEthereum();
+      const ethersProvider = new BrowserProvider(provider);
+      const nonce = await ethersProvider.getTransactionCount(userAccount);
+      // pay ETH
+      if (isSameAddress(payToken.address, ETH_ADDRESS)) {
+        const tx = await doSwapETHForTokens(
+          payAmount,
+          (Number(receiveAmount) * (1 - Number(slippage) / 100)).toFixed(
+            DEFAULT_CALCULATE_PRECISION
+          ),
+          [WETHAddress, receiveToken.address],
+          userAccount,
+          ddl,
+          swapContract,
+          receiveToken.decimals,
+          nonce
+        );
 
-      await tx.wait();
+        await tx.wait();
+      }
+      // receive ETH
+      else if (isSameAddress(receiveToken.address, ETH_ADDRESS)) {
+        const tx = await doSwapTokensForETH(
+          (Number(receiveAmount) * (1 - Number(slippage) / 100)).toFixed(
+            DEFAULT_CALCULATE_PRECISION
+          ),
+          payAmount,
+          [payToken.address, WETHAddress],
+          userAccount,
+          ddl,
+          swapContract,
+          payToken.decimals,
+          nonce
+        );
+
+        await tx.wait();
+      }
+      // swap ERC20 tokens
+      else {
+        const tx = await doSwap(
+          payAmount,
+          (Number(receiveAmount) * (1 - Number(slippage) / 100)).toFixed(
+            DEFAULT_CALCULATE_PRECISION
+          ),
+          [payToken.address, receiveToken.address],
+          userAccount,
+          ddl,
+          swapContract,
+          payToken.decimals,
+          receiveToken.decimals,
+          nonce
+        );
+
+        await tx.wait();
+      }
 
       setPayAmount("0");
       setReceiveAmount("0");
@@ -573,7 +715,7 @@ const Swap: FC<{
       enqueueSnackbar({
         variant: "warning",
         autoHideDuration: 5000,
-        message: "Approval Failed.",
+        message: "Transaction Failed.",
         key: "failed",
         action: (key) => (
           <RenderSnackbarAction
@@ -591,29 +733,16 @@ const Swap: FC<{
 
   const switchTokens = () => {
     const temp = payToken;
-    const filtered = filterTokenByPair(receiveToken.address);
+    const filtered = filterTokenByPair(
+      receiveToken.address,
+      pairList,
+      WETHAddress,
+      tokenList
+    );
 
     setPayToken(receiveToken);
     setFilteredTokenList(filtered.length ? filtered : tokenList);
     setReceiveToken(temp);
-    getBaseExchangeRate();
-  };
-
-  const filterTokenByPair = (address: string) => {
-    const matchedPair = pairList.filter(
-      (pair) => pair.token0 === address || pair.token1 === address
-    );
-
-    const tokenAddresses: string[] = [];
-    matchedPair.forEach((pair) => {
-      !tokenAddresses.includes(pair.token0) && tokenAddresses.push(pair.token0);
-      !tokenAddresses.includes(pair.token1) && tokenAddresses.push(pair.token1);
-    });
-
-    return tokenList.filter(
-      (token) =>
-        token.address !== address && tokenAddresses.includes(token.address)
-    );
   };
 
   useEffect(() => {
@@ -625,20 +754,25 @@ const Swap: FC<{
   }, [userAccount, payToken]);
 
   useEffect(() => {
-    getBaseExchangeRate();
-  }, [swapContract]);
+    if (pairAddress) {
+      getBaseExchangeRate();
+    }
+  }, [pairAddress, payToken, receiveToken]);
 
   useEffect(() => {
     const newPair = findPairByTokens(
-      payToken.address,
-      receiveToken.address,
+      isSameAddress(payToken.address, ETH_ADDRESS)
+        ? WETHAddress
+        : payToken.address,
+      isSameAddress(receiveToken.address, ETH_ADDRESS)
+        ? WETHAddress
+        : receiveToken.address,
       pairList
     );
     setPairAddress(newPair?.pair || "");
-    setExchangeRate(0n);
+    setExchangeRate(0);
     setCurrentPairLiquidity({ pay: 0, receive: 0 });
     if (newPair?.pair) {
-      getBaseExchangeRate();
       getLiquidity(newPair.pair);
     }
     setPayAmount("0");
@@ -650,8 +784,13 @@ const Swap: FC<{
       return;
     }
     setPayToken(tokenList[0]);
-    const filtered = filterTokenByPair(tokenList[0].address);
-    setReceiveToken(filtered[0] || tokenList[0]);
+    const filtered = filterTokenByPair(
+      tokenList[0].address,
+      pairList,
+      WETHAddress,
+      tokenList
+    );
+    setReceiveToken(filtered[0] || tokenList[1]);
     setFilteredTokenList(filtered.length ? filtered : tokenList);
   }, [tokenList]);
 
@@ -663,15 +802,16 @@ const Swap: FC<{
     payAllowance <
     parseUnits((Number(payAmount) || 0).toString(), payToken.decimals);
 
-  const priceSlippage = useMemo(() => {
+  const calcPriceSlippage = (payAmount: string, receiveAmount: string) => {
     if (Number(payAmount) && Number(receiveAmount)) {
       const payUsd = payToken.price * Number(payAmount);
       const receiveUsd = receiveToken.price * Number(receiveAmount);
 
-      return payUsd ? (receiveUsd - payUsd) / payUsd : 0;
+      setPriceSlippage(payUsd ? (receiveUsd - payUsd) / payUsd : 0);
+      return;
     }
-    return 0;
-  }, [payAmount, payToken.price, receiveAmount, receiveToken.price]);
+    setPriceSlippage(0);
+  };
 
   const dangerSwap = priceSlippage < DANGER_SWAP_THRESHOLD;
 
@@ -693,9 +833,14 @@ const Swap: FC<{
           }}
           onTokenChange={(token) => {
             setPayToken(token);
-            const filtered = filterTokenByPair(token.address);
+            const filtered = filterTokenByPair(
+              token.address,
+              pairList,
+              WETHAddress,
+              tokenList
+            );
             setFilteredTokenList(filtered.length ? filtered : tokenList);
-            setReceiveToken(filtered[0] || tokenList[0]);
+            setReceiveToken(filtered[0] || tokenList[1]);
           }}
           updateTime={updateTime}
           tokenList={tokenList}
@@ -729,9 +874,8 @@ const Swap: FC<{
             onClick={() => setShowSwapDetail(!showSwapDetail)}
           >
             <span className="">
-              1 {payToken.name} ={" "}
-              {formatBalanceNumber(Number(formatEther(exchangeRate)))}{" "}
-              {receiveToken.name}
+              1 {payToken.symbol} = {formatBalanceNumber(exchangeRate)}{" "}
+              {receiveToken.symbol}
             </span>
             <ExpandMore className={showSwapDetail ? "rotate-180" : ""} />
           </div>
@@ -751,18 +895,16 @@ const Swap: FC<{
                   ${formatNumber(payToken.price * Number(payAmount) * 0.01)}
                 </span>
               </div>
-              <div className="flex items-center justify-between text-sm font-medium">
-                <span className=" text-black/50 dark:text-white/50">
-                  Network Fee
-                </span>
+              {/* <div className="flex items-center justify-between text-sm font-medium">
+                <span className=" text-black/50">Network Fee</span>
                 <span className="">${gasCost}</span>
-              </div>
+              </div> */}
             </div>
           )}
         </div>
       ) : (
         <div className="flex h-10 items-center text-[#F9441F]">
-          No pool for swap, you can add liquidity to create a new pool
+          No pool found
         </div>
       )}
       <SlippageController
@@ -834,7 +976,10 @@ const Swap: FC<{
                 Cancel Swap
               </button>
               <button
-                onClick={handleSwap}
+                onClick={() => {
+                  setConfirmOpen(false);
+                  handleSwap();
+                }}
                 className="w-1/2 h-10 rounded-[14px] border border-[#838594]  font-[Inter] font-medium text-white tracking-wider bg-[#000] dark:bg-[#FF9900] dark:text-[#2B2D34] dark:border-0 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Swap Anyway

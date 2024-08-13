@@ -1,36 +1,47 @@
+import { useConnectWallet } from "@web3-onboard/react";
+import dayjs from "dayjs";
+import { BrowserProvider, Contract, formatUnits, parseUnits } from "ethers";
+import { useSnackbar } from "notistack";
+import React, { FC, useEffect, useState } from "react";
+import { RenderSnackbarAction } from ".";
+import { useDispatch, useSelector, userAddress } from "../../../lib/redux";
 import { SwapPairInfo, SwapTokenInfo } from "../../api";
 import { checkApprove } from "../../contract";
 import {
   SWAP_ROUTER_ADDRESS,
   addLiquidity,
-  getExchangeRateByPair,
+  addLiquidityETH,
+  getETHBalance,
+  initPairContract,
   initSwapContracts,
   initTokenContract,
 } from "../../contract/swap";
-import { useDispatch, useSelector, userAddress } from "../../../lib/redux";
-import { formatBalanceNumber } from "../../utils";
-import dayjs from "dayjs";
-import { Contract, formatEther, formatUnits, parseUnits } from "ethers";
-import { useSnackbar } from "notistack";
-import { FC, useEffect, useState } from "react";
+import {
+  DEFAULT_CALCULATE_PRECISION,
+  formatBalanceNumber,
+  formatNumber,
+  isSameAddress,
+  prettifyNumber,
+} from "../../utils";
+import { checkNetwork, getEthereum } from "../../utils/ethereum";
 import {
   DEFAULT_MINUTES,
-  DEFAULT_RATE_AMOUNT_IN,
-  DEFAULT_RATE_AMOUNT_OUT_MULTIPLAYER,
-  RenderSnackbarAction,
+  ETH_ADDRESS,
   SlippageController,
   SwapTokenInput,
   defaultSlippagePercent,
   defaultTokenDTO,
+  filterTokenByPair,
   findPairByTokens,
 } from "./swap";
-import React from "react";
 
 const AddLiquidity: FC<{
   tokenList: SwapTokenInfo[];
   pairList: SwapPairInfo[];
-}> = ({ tokenList, pairList }) => {
+  updateTokensAndPairs: () => void;
+}> = ({ tokenList, pairList, updateTokensAndPairs }) => {
   const dispatch = useDispatch();
+  const [{ wallet }, connect] = useConnectWallet();
   const userAccount = useSelector(userAddress);
   const { enqueueSnackbar, closeSnackbar } = useSnackbar();
   const [swapContract, setSwapContract] = useState<Contract>();
@@ -42,57 +53,85 @@ const AddLiquidity: FC<{
   const [updateTime, setUpdateTime] = useState<number>(0);
   const [slippage, setSlippage] = useState<string>(defaultSlippagePercent);
   const [deadline, setDeadline] = useState<number>(DEFAULT_MINUTES);
-  const [exchangeRate, setExchangeRate] = useState<bigint>(0n);
+  const [exchangeRate, setExchangeRate] = useState<number>(0);
   const [disabledBtn, setDisabledBtn] = useState<boolean>(false);
   const [allowanceA, setAllowanceA] = useState<bigint>(0n);
   const [allowanceB, setAllowanceB] = useState<bigint>(0n);
   const [balanceAExceed, setBalanceAExceed] = useState<boolean>(false);
   const [balanceBExceed, setBalanceBExceed] = useState<boolean>(false);
+  const [WETHAddress, setWETHAddress] = useState<string>("");
+  const [tokenAmounts, setTokenAmounts] = useState<{
+    tokenA: number;
+    tokenB: number;
+  }>({ tokenA: 0, tokenB: 0 });
 
   const init = async () => {
-    const contacts = await initSwapContracts();
-    setSwapContract(contacts?.swapContract);
+    await checkNetwork();
+    const contracts = await initSwapContracts();
+    setSwapContract(contracts?.swapContract);
+
+    if (contracts?.swapContract) {
+      const weth = await contracts.swapContract.WETH();
+      setWETHAddress(weth);
+    }
   };
 
   const fetchAllowance = async () => {
     const tokenAContract = await initTokenContract(tokenA.address);
     const tokenBContract = await initTokenContract(tokenB.address);
 
-    const allowanceForA = await tokenAContract.allowance(
-      userAccount,
-      SWAP_ROUTER_ADDRESS
-    );
-    const allowanceForB = await tokenBContract.allowance(
-      userAccount,
-      SWAP_ROUTER_ADDRESS
-    );
+    const allowanceForA = isSameAddress(tokenA.address, ETH_ADDRESS)
+      ? await getETHBalance(userAccount)
+      : await tokenAContract.allowance(userAccount, SWAP_ROUTER_ADDRESS);
+    const allowanceForB = isSameAddress(tokenB.address, ETH_ADDRESS)
+      ? await getETHBalance(userAccount)
+      : await tokenBContract.allowance(userAccount, SWAP_ROUTER_ADDRESS);
+
     setAllowanceA(allowanceForA);
     setAllowanceB(allowanceForB);
   };
 
   const getBaseExchangeRate = async () => {
-    if (!swapContract || !tokenA.address || !tokenB.address) {
+    if (!pairAddress) {
       return;
     }
 
+    await checkNetwork();
     try {
-      const val = await getExchangeRateByPair(
-        DEFAULT_RATE_AMOUNT_IN,
-        swapContract,
-        [tokenA.address, tokenB.address],
-        tokenA.decimals
-      );
-      setExchangeRate(val * DEFAULT_RATE_AMOUNT_OUT_MULTIPLAYER);
+      const pairContract = await initPairContract(pairAddress);
+      const reserves = (await pairContract.getReserves()).toObject();
+      const token0 = await pairContract.token0();
+      const { _reserve0, _reserve1 } = reserves;
+      let amounts = {
+        tokenA: 0,
+        tokenB: 0,
+      };
+
+      if (isSameAddress(tokenA.address, token0)) {
+        amounts = {
+          tokenA: Number(formatUnits(_reserve0, tokenA.decimals)),
+          tokenB: Number(formatUnits(_reserve1, tokenB.decimals)),
+        };
+      } else {
+        amounts = {
+          tokenA: Number(formatUnits(_reserve1, tokenA.decimals)),
+          tokenB: Number(formatUnits(_reserve0, tokenB.decimals)),
+        };
+      }
+      setTokenAmounts(amounts);
+      setExchangeRate(amounts.tokenB / amounts.tokenA);
     } catch (error) {
       console.log(error);
     }
   };
 
   const approveTokens = async () => {
+    await checkNetwork();
     const key = "approveTokens";
 
     enqueueSnackbar({
       message: "Pending approval...",
+      variant: "info",
       key,
       action: (key) => (
         <RenderSnackbarAction snackbarKey={key} closeSnackbar={closeSnackbar} />
@@ -100,24 +139,31 @@ const AddLiquidity: FC<{
     });
     setDisabledBtn(true);
     try {
+      const provider = getEthereum();
+      const ethersProvider = new BrowserProvider(provider);
+      const nonce = await ethersProvider.getTransactionCount(userAccount);
       const tokenAContract = await initTokenContract(tokenA.address);
       const tokenBContract = await initTokenContract(tokenB.address);
-      if (allowanceA < parseUnits(amountA || "0", tokenA.decimals)) {
+      const approveA = allowanceA < parseUnits(amountA || "0", tokenA.decimals);
+      if (approveA) {
         const allowance = await checkApprove(
           tokenAContract,
           userAccount,
           SWAP_ROUTER_ADDRESS,
           amountA,
+          nonce,
           tokenA.decimals
         );
         setAllowanceA(allowance || 0n);
       }
       if (allowanceB < parseUnits(amountB || "0", tokenB.decimals)) {
+        const nonceNew = await ethersProvider.getTransactionCount(userAccount);
         const allowance = await checkApprove(
           tokenBContract,
           userAccount,
           SWAP_ROUTER_ADDRESS,
           amountB,
+          nonceNew,
           tokenB.decimals
         );
         setAllowanceB(allowance || 0n);
@@ -131,10 +177,13 @@ const AddLiquidity: FC<{
     if (!swapContract || Number(amountA) <= 0 || Number(amountB) <= 0) {
       return;
     }
+
+    await checkNetwork();
     const key = "addLiquidity";
     setDisabledBtn(true);
     enqueueSnackbar({
       message: "Pending transaction...",
+      variant: "info",
       key,
       action: (key) => (
         <RenderSnackbarAction snackbarKey={key} closeSnackbar={closeSnackbar} />
@@ -143,20 +192,57 @@ const AddLiquidity: FC<{
 
     try {
       const ddl = dayjs().add(deadline, "minute").unix();
-      const tx = await addLiquidity(
-        tokenA.address,
-        tokenB.address,
-        amountA,
-        amountB,
-        (Number(amountA) * (1 - Number(slippage) / 100)).toString(),
-        (Number(amountB) * (1 - Number(slippage) / 100)).toString(),
-        userAccount,
-        ddl,
-        swapContract,
-        tokenA.decimals,
-        tokenB.decimals
-      );
-      await tx.wait();
+      const provider = getEthereum();
+      const ethersProvider = new BrowserProvider(provider);
+      const nonce = await ethersProvider.getTransactionCount(userAccount);
+
+      if (
+        isSameAddress(tokenA.address, ETH_ADDRESS) ||
+        isSameAddress(tokenB.address, ETH_ADDRESS)
+      ) {
+        const tokenAIsETH = isSameAddress(tokenA.address, ETH_ADDRESS);
+
+        const tx = await addLiquidityETH(
+          tokenAIsETH ? tokenB.address : tokenA.address,
+          tokenAIsETH ? amountA : amountB,
+          tokenAIsETH ? amountB : amountA,
+
+          (
+            Number(tokenAIsETH ? amountA : amountB) *
+            (1 - Number(slippage) / 100)
+          ).toFixed(DEFAULT_CALCULATE_PRECISION),
+          (
+            Number(tokenAIsETH ? amountB : amountA) *
+            (1 - Number(slippage) / 100)
+          ).toFixed(DEFAULT_CALCULATE_PRECISION),
+          userAccount,
+          ddl,
+          swapContract,
+          tokenAIsETH ? tokenB.decimals : tokenA.decimals,
+          nonce
+        );
+        await tx.wait();
+      } else {
+        const tx = await addLiquidity(
+          tokenA.address,
+          tokenB.address,
+          amountA,
+          amountB,
+          (Number(amountA) * (1 - Number(slippage) / 100)).toFixed(
+            DEFAULT_CALCULATE_PRECISION
+          ),
+          (Number(amountB) * (1 - Number(slippage) / 100)).toFixed(
+            DEFAULT_CALCULATE_PRECISION
+          ),
+          userAccount,
+          ddl,
+          swapContract,
+          tokenA.decimals,
+          tokenB.decimals,
+          nonce
+        );
+        await tx.wait();
+      }
     } catch (error) {
       console.log(error);
       enqueueSnackbar({
@@ -180,24 +266,25 @@ const AddLiquidity: FC<{
     setUpdateTime(dayjs().unix());
     getBaseExchangeRate();
     fetchAllowance();
+    updateTokensAndPairs();
   };
 
   const updateAmountB = (value: string) => {
     if (!pairAddress) {
       return;
     }
-    const amount = Number(value) * Number(formatUnits(exchangeRate));
+    const amount = Number(value) * exchangeRate;
 
-    setAmountB(amount > 0 ? amount.toFixed(3) : "0");
+    setAmountB(amount > 0 ? prettifyNumber(amount).toString() : "0");
   };
 
   const updateAmountA = (value: string) => {
     if (!pairAddress) {
       return;
     }
-    const amount = Number(value) / Number(formatEther(exchangeRate));
+    const amount = Number(value) / exchangeRate;
 
-    setAmountA(amount > 0 ? amount.toFixed(3) : "0");
+    setAmountA(amount > 0 ? prettifyNumber(amount).toString() : "0");
   };
 
   useEffect(() => {
@@ -213,19 +300,33 @@ const AddLiquidity: FC<{
     }
     setTokenA(tokenList[0]);
     setTokenB(tokenList[1]);
+
+    const filtered = filterTokenByPair(
+      tokenList[0].address,
+      pairList,
+      WETHAddress,
+      tokenList
+    );
+    setTokenB(filtered[0] || tokenList[1]);
   }, [tokenList]);
 
   useEffect(() => {
-    const newPair = findPairByTokens(tokenA.address, tokenB.address, pairList);
+    const newPair = findPairByTokens(
+      isSameAddress(tokenA.address, ETH_ADDRESS) ? WETHAddress : tokenA.address,
+      isSameAddress(tokenB.address, ETH_ADDRESS) ? WETHAddress : tokenB.address,
+      pairList
+    );
     setPairAddress(newPair?.pair || "");
-    setExchangeRate(0n);
-
-    if (newPair?.pair && swapContract) {
-      getBaseExchangeRate();
-    }
+    setExchangeRate(0);
     setAmountA("0");
     setAmountB("0");
-  }, [tokenA, tokenB, pairList, swapContract]);
+  }, [tokenA, tokenB, pairList]);
+
+  useEffect(() => {
+    if (pairAddress) {
+      getBaseExchangeRate();
+    }
+  }, [pairAddress]);
 
   useEffect(() => {
     init();
@@ -270,9 +371,61 @@ const AddLiquidity: FC<{
         />
       </div>
       {pairAddress ? (
-        <div className="flex dark:text-white/70">
-          1 {tokenA.name} ={" "}
-          {formatBalanceNumber(Number(formatEther(exchangeRate)))} {tokenB.name}
+        <div className="flex flex-col gap-2 mt-2">
+          <span className="text-[#3D3F48] dark:text-white/80 font-medium">
+            Pool Info
+          </span>
+          <div className="flex flex-wrap gap-y-4 px-4 py-4 text-black dark:text-white border border-black dark:border-white/30 rounded-2xl">
+            <div className="flex flex-col w-1/3 items-center gap-0.5">
+              <span className="font-medium">
+                {formatBalanceNumber(exchangeRate)}
+              </span>
+              <span className="text-sm text-[#838594]">
+                {tokenB.symbol} per {tokenA.symbol}
+              </span>
+            </div>
+            <div className="flex flex-col w-1/3 items-center gap-0.5">
+              <span className="font-medium">
+                {formatBalanceNumber(1 / exchangeRate)}
+              </span>
+              <span className="text-sm text-[#838594]">
+                {tokenA.symbol} per {tokenB.symbol}
+              </span>
+            </div>
+            <div className="flex flex-col w-1/3 items-center gap-0.5">
+              <span className="font-medium">
+                {prettifyNumber(
+                  (Number(amountA) / (tokenAmounts.tokenA + Number(amountA))) *
+                    100
+                )}
+                %
+              </span>
+              <span className="text-sm text-[#838594]">Share of pool</span>
+            </div>
+
+            <div className="flex flex-col w-1/3 items-center gap-0.5">
+              <span className="font-medium">
+                {formatNumber(tokenAmounts.tokenA)}
+              </span>
+              <span className="text-sm text-[#838594]">
+                {tokenA.symbol} in pool
+              </span>
+            </div>
+            <div className="flex flex-col w-1/3 items-center gap-0.5">
+              <span className="font-medium">
+                {formatNumber(tokenAmounts.tokenB)}
+              </span>
+              <span className="text-sm text-[#838594]">
+                {tokenB.symbol} in pool
+              </span>
+            </div>
+            <div className="flex flex-col w-1/3 items-center gap-0.5">
+              <span className="font-medium">
+                ${formatNumber(tokenAmounts.tokenA * tokenA.price * 2)}
+              </span>
+              <span className="text-sm text-[#838594]">FDV</span>
+            </div>
+          </div>
         </div>
       ) : (
         <div className="flex text-[#F9441F]">
@@ -287,8 +440,8 @@ const AddLiquidity: FC<{
       />
       {!userAccount && (
         <button
-          // onClick={() => dispatch(layoutSlice.actions.openConnectModal())}
-          className="w-full h-14 rounded-[14px] border border-[#838594] uppercase font-[Inter] font-medium tracking-wider text-white bg-[#000] disabled:opacity-50 disabled:cursor-not-allowed"
+          onClick={() => connect()}
+          className="w-full h-14 rounded-[14px] border border-[#838594]  font-[Inter] font-medium tracking-wider text-white bg-[#000] dark:bg-[#FF9900] dark:text-[#2B2D34] dark:border-0 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Connect Wallet
         </button>
@@ -303,12 +456,12 @@ const AddLiquidity: FC<{
             balanceBExceed
           }
           onClick={needApprove ? approveTokens : handleAddLiquidity}
-          className="w-full h-14 rounded-[14px] border border-[#838594] uppercase font-[Inter] font-medium tracking-wider text-white bg-[#000] disabled:opacity-50 disabled:cursor-not-allowed"
+          className="w-full h-14 rounded-[14px] border border-[#838594] text-white  font-[Inter] font-medium tracking-wider bg-[#000] dark:bg-[#FF9900] dark:text-[#2B2D34] dark:border-0 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {balanceAExceed || balanceBExceed
             ? "Balance Insufficient"
             : needApprove
-            ? "Approve"
+            ? `Approve ${needApproveA ? tokenA.symbol : tokenB.symbol}`
             : "Add Liquidity"}
         </button>
       )}

@@ -41,6 +41,10 @@ body {
   outline: none;
 }
 
+.MuiPaper-root {
+  background: var(--swap-tab) !important;
+}
+
 @keyframes logo-spin {
   from {
     transform: rotate(0deg);

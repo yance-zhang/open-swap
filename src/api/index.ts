@@ -37,8 +37,17 @@ export type SwapTokenInfo = {
   symbol: string;
 };
 
+export type LPTokenInfo = SwapPairInfo & {
+  balance: string;
+  supply: string;
+  token0Info?: SwapTokenInfo;
+  token1Info?: SwapTokenInfo;
+};
+
 export const getTokenListApi = () => {
-  return axios.get<TApiResponse<SwapTokenInfo[]>>(`/frame/token_list`);
+  return axios.get<TApiResponse<SwapTokenInfo[]>>(`/swap/token_list`, {
+    params: { network: "eth_sepolia" },
+  });
 };
 
 export type SwapPairInfo = {
@@ -50,11 +59,19 @@ export type SwapPairInfo = {
 };
 
 export const getSwapPairListApi = async () => {
-  return axios.get<TApiResponse<SwapPairInfo[]>>("/frame/swap/pair_list");
+  return axios.get<TApiResponse<SwapPairInfo[]>>("/swap/pair_list", {
+    params: { network: "eth_sepolia" },
+  });
 };
 
 export const getETHPriceApi = async () => {
   return axios.get(
     `https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd`
   );
+};
+export const getTokenPriceApi = async (params: {
+  ids: string;
+  vs_currencies: string;
+}) => {
+  return axios.get(`https://api.coingecko.com/api/v3/simple/price`, { params });
 };

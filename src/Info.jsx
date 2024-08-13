@@ -133,6 +133,7 @@ const HeaderItem = (props) => {
         flex: "1 1 0px",
         textAlign: props.left ? "left" : "right",
       }}
+      className="text-black dark:text-white"
       {...props}
     >
       {props.children}
@@ -391,9 +392,11 @@ const InfoContent = (props) => {
   return (
     <Box
       sx={{
-        padding: "0 64px",
+        padding: "0 24px 20px",
         position: "relative",
         borderTop: "1px solid rgba(69, 72, 81, 0.1)",
+        overflow: "auto",
+        height: "calc(100vh - 150px)",
       }}
     >
       <Box
@@ -412,16 +415,14 @@ const InfoContent = (props) => {
             paddingTop: "40px",
           }}
         >
-          <Stack justifyContent={"center"} direction={"row"} textAlign={"left"}>
+          <div className="flex flex-col lg:flex-row items-stretch gap-5">
             <Box
               sx={{
                 background: "var(--content-bg)",
                 // width: "600px",
                 height: "345px",
                 padding: "20px",
-                paddingRight: "0",
                 borderRadius: "16px",
-                marginRight: "20px",
                 flex: "1 1 0px",
               }}
             >
@@ -499,7 +500,7 @@ const InfoContent = (props) => {
               </Box>
               <Box id="linechart-container" sx={{ height: "200px" }}></Box>
             </Box>
-          </Stack>
+          </div>
         </Box>
         <Box
           sx={{
@@ -538,10 +539,7 @@ const InfoContent = (props) => {
                 <img src={searchIcon} />
               </Box>
               <StyledInput
-                sx={{
-                  width: "430px",
-                  height: "48px",
-                }}
+                className="w-[150px] lg:w-[480px] h-12"
                 autoComplete="off"
                 placeholder="Search by token name or address"
                 // variant="standard"
