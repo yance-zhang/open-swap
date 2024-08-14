@@ -241,9 +241,9 @@ const Dex: FC<{ openChart: () => void }> = ({ openChart }) => {
               />
             )}
           </div>
-          {/* {activeTab === "liquidity" && (
+          {activeTab === "liquidity" && (
             <LPTokens tokenList={tokenList} pairList={pairList} />
-          )} */}
+          )}
         </div>
       </div>
     </div>
