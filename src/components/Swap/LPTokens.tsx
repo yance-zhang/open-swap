@@ -408,19 +408,20 @@ const LPTokens: FC<{
 
     for (let i = 0; i < pairList.length; i++) {
       const pair = pairList[i];
-
-      const { balance, supply, reserve0, reserve1 } =
-        await getLPTokenBalanceAndSupplyByPair(pair);
-      if (Number(balance) > 0) {
-        list.push({
-          ...pair,
-          balance,
-          supply,
-          reserve0,
-          reserve1,
-          token0Info: tokenMap.get(pair.token0),
-          token1Info: tokenMap.get(pair.token1),
-        });
+      if (tokenMap.get(pair.token0) && tokenMap.get(pair.token1)) {
+        const { balance, supply, reserve0, reserve1 } =
+          await getLPTokenBalanceAndSupplyByPair(pair);
+        if (Number(balance) > 0) {
+          list.push({
+            ...pair,
+            balance,
+            supply,
+            reserve0,
+            reserve1,
+            token0Info: tokenMap.get(pair.token0),
+            token1Info: tokenMap.get(pair.token1),
+          });
+        }
       }
     }
     setLoading(false);

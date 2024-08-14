@@ -49,7 +49,9 @@ const Dex: FC<{ openChart: () => void }> = ({ openChart }) => {
     try {
       const tokens = await getTokenListApi();
       setTokenList(
-        tokens.data.map((t) => ({ ...t, address: t.address.toLowerCase() }))
+        tokens.data
+          .filter((t) => !t.name.toLowerCase().includes("puf"))
+          .map((t) => ({ ...t, address: t.address.toLowerCase() }))
       );
     } catch (error) {
       console.log(error);
