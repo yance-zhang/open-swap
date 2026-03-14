@@ -23,7 +23,6 @@ const metamaskSDKWallet = metamaskSDK({
   },
 });
 
-const INFURA_KEY = "b0caabe4b0bc4153a499536aa88a053d";
 const injected = injectedModule();
 
 const wallets = [metamaskSDKWallet, injected];
@@ -32,13 +31,13 @@ const chains = [
     id: "0x1",
     token: "ETH",
     label: "Ethereum Mainnet",
-    rpcUrl: `https://mainnet.infura.io/v3/${INFURA_KEY}`,
+    rpcUrl: "https://eth-mainnet.public.blastapi.io",
   },
   {
     id: "0x5",
     token: "ETH",
     label: "Goerli",
-    rpcUrl: `https://goerli.infura.io/v3/${INFURA_KEY}`,
+    rpcUrl: "https://eth-goerli.public.blastapi.io",
   },
 ];
 
@@ -68,5 +67,5 @@ ReactDOM.createRoot(document.getElementById("root")).render(
         <RouterProvider router={router}></RouterProvider>
       </SnackbarProvider>
     </Providers>
-  </Web3OnboardProvider>
+  </Web3OnboardProvider>,
 );
